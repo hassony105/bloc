@@ -80,6 +80,7 @@ abstract class Bloc<Event, State> extends BlocBase<State>
   /// [event] will not be processed.
   @override
   void add(Event event) {
+    _subscriptions.forEach(print);
     // ignore: prefer_asserts_with_message
     assert(() {
       final handlerExists = _handlers.any((handler) => handler.isType(event));
@@ -224,6 +225,73 @@ abstract class Bloc<Event, State> extends BlocBase<State>
           try {
             _emitters.add(emitter);
             await handler(event as E, emitter);
+          } catch (error, stackTrace) {
+            onError(error, stackTrace);
+            rethrow;
+          } finally {
+            onDone();
+          }
+        }
+
+        handleEvent();
+        return controller.stream;
+      },
+    ).listen(null);
+    _subscriptions.add(subscription);
+  }
+
+  ///
+  void updateTransformer<E extends Event>(EventTransformer<E>? transformer){
+    // ignore: prefer_asserts_with_message
+    assert(() {
+      final handlerExists = _handlers.any((handler) => handler.type == E);
+      if (!handlerExists) {
+        throw StateError(
+          'on<$E> was called without registered. '
+              'There should only be a single event handler per event type.',
+        );
+      }
+      var selected = _handlers.firstWhere((handler) => handler.type == E);
+      _handlers[_handlers.indexOf(selected)] = _Handler(
+        isType: (dynamic e) => e is E,
+        type: E,
+      );
+
+      return true;
+    }());
+
+    // if(_subscriptions.any((element) => element == ))
+    final subscription = (transformer ?? _eventTransformer)(
+      _eventController.stream.where((event) => event is E).cast<E>(),
+          (dynamic event) {
+        void onEmit(State state) {
+          if (isClosed) return;
+          if (this.state == state && _emitted) return;
+          onTransition(
+            Transition(
+              currentState: this.state,
+              event: event as E,
+              nextState: state,
+            ),
+          );
+          emit(state);
+        }
+
+        final emitter = _Emitter(onEmit);
+        final controller = StreamController<E>.broadcast(
+          sync: true,
+          onCancel: emitter.cancel,
+        );
+
+        Future<void> handleEvent() async {
+          void onDone() {
+            emitter.complete();
+            _emitters.remove(emitter);
+            if (!controller.isClosed) controller.close();
+          }
+
+          try {
+            _emitters.add(emitter);
           } catch (error, stackTrace) {
             onError(error, stackTrace);
             rethrow;
